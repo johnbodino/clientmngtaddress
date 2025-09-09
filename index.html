@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BTS Intersection & Cardinal Direction Finder (ORS + OSM)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/x-icon" href="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSVqk-6YLAv5gg9IKTUovjU8s2Pht7rv2CKOw&s">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Turf for geometry helpers -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
+    :root {
+      --bg: #1a0d2e; --panel:#2d1b4e; --muted:#9d8df1; --text:#f8f6ff; --accent:#c89dff;
+      --accent-2:#ff6b9d; --warn:#ffd93d; --chip:#3d2a5c; --border:#4a3268;
+      --bts-purple: #6f42c1; --bts-pink: #e91e63; --bts-gold: #ffc107;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:linear-gradient(135deg, var(--bg) 0%, #2d1b4e 100%);color:var(--text);font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    #app{display:grid;grid-template-columns:380px 1fr;height:100%}
+    #sidebar{padding:16px;background:linear-gradient(180deg, var(--panel) 0%, rgba(45, 27, 78, 0.95) 100%);border-right:1px solid var(--border);overflow:auto;backdrop-filter:blur(10px)}
+    h1{font-size:20px;margin:0 0 12px;color:var(--bts-gold);font-weight:700;text-shadow:0 2px 4px rgba(0,0,0,0.3)}
+    .muted{color:var(--muted)}
+    .search{position:relative;display:flex;gap:8px;align-items:center;margin-bottom:12px;background:rgba(15, 23, 42, 0.8);border:1px solid var(--border);border-radius:14px;padding:10px 12px;backdrop-filter:blur(5px)}
+    .search input{background:transparent;border:none;outline:none;color:var(--text);width:100%;font-size:14px}
+    .search input::placeholder{color:var(--muted)}
+    .btn{background:linear-gradient(135deg, var(--bts-purple) 0%, var(--bts-pink) 100%);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:8px 12px;font-weight:600;cursor:pointer;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(0,0,0,0.2)}
+    .btn:hover{transform:translateY(-1px);box-shadow:0 4px 8px rgba(111, 66, 193, 0.3)}
+    .btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+    .dropdown{position:absolute;top:46px;left:0;right:0;background:rgba(15, 23, 42, 0.95);border:1px solid var(--border);border-radius:10px;overflow:hidden;z-index:1000;display:none;max-height:260px;overflow:auto;backdrop-filter:blur(10px)}
+    .dropdown div{padding:8px 12px;cursor:pointer;transition:background 0.2s ease}
+    .dropdown div:hover{background:rgba(111, 66, 193, 0.2)}
+    .card{background:rgba(15, 23, 42, 0.6);border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:12px;backdrop-filter:blur(5px);box-shadow:0 4px 6px rgba(0,0,0,0.1)}
+    .card h2{font-size:14px;margin:0 0 8px;color:var(--bts-gold);font-weight:600}
+    .chip{display:inline-flex;gap:8px;align-items:center;padding:8px 10px;border-radius:999px;background:var(--chip);color:var(--text);border:1px solid var(--border);font-size:12px;margin:4px 6px 0 0;backdrop-filter:blur(5px)}
+    .legend{display:flex;gap:8px;flex-wrap:wrap}
+    .legend .swatch{width:10px;height:10px;border-radius:2px;display:inline-block}
+    .sw-blue{background:#6f42c1}.sw-green{background:#e91e63}.sw-yellow{background:#ffc107}.sw-red{background:#ff6b9d}.sw-white{background:#f8f6ff;border:1px solid #9d8df1}
+    .line{display:flex;gap:8px;align-items:center;font-size:13px}
+    .row{display:grid;grid-template-columns:1fr;gap:8px}
+    .kbd{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:2px 6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:var(--accent-2);font-weight:600}
+    .axis{font-weight:700;color:var(--warn)}
+    .small{font-size:11px;color:var(--muted)}
+    #map{height:100%;width:100%}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    .notice{font-size:12px;color:var(--muted)}
+    .status{font-size:11px;color:var(--muted);margin-top:6px}
+    .footer{position:fixed;bottom:0;right:0;padding:8px 16px;background:rgba(45, 27, 78, 0.9);border-top-left-radius:10px;font-size:11px;color:var(--muted);backdrop-filter:blur(5px)}
+    .bts-gradient{background:linear-gradient(135deg, var(--bts-purple) 0%, var(--bts-pink) 50%, var(--bts-gold) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h1>🎵 BTS Intersection & Cardinal Direction Finder 💜</h1>
+      <div class="muted" style="margin-bottom:12px">Find your way like BTS finds ARMY! Search a place (ORS), then click a road to describe it relative to its nearest cross street. 방탄소년단 forever! 💜</div>
+
+      <div class="search">
+        <input id="query" placeholder="Search address/place (like BTS concert venues!)" autocomplete="off" />
+        <button id="goBtn" class="btn" title="Search">🔍 Search</button>
+        <button id="clearBtn" class="btn" title="Clear map">✨ Clear</button>
+        <div id="suggestions" class="dropdown"></div>
+      </div>
+      <div id="geocoderStatus" class="status"></div>
+
+      <div class="card">
+        <h2>💜 Nearest Intersection (Like BTS Members Meeting!)</h2>
+        <div id="intersectionName" class="row muted">—</div>
+        <div class="legend" style="margin-top:8px">
+          <span class="chip"><span class="swatch sw-blue"></span> Clicked road (RM's path)</span>
+          <span class="chip"><span class="swatch sw-green"></span> Cross road (Jin's route)</span>
+          <span class="chip"><span class="swatch sw-yellow"></span> Intersection (Meeting point)</span>
+          <span class="chip"><span class="swatch sw-red"></span> Search point (ARMY location)</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🛣️ Road Description (Click a segment like choosing your bias!)</h2>
+        <div id="roadDescription" class="row muted">Tip: Click a road segment on the map to get directions BTS-style! 💜</div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <button id="downloadKML" class="btn" disabled>📍 Download KML (Google Earth)</button>
+        </div>
+        <div class="small" style="margin-top:6px">KML includes: intersection marker, clicked road snippet, cross-road snippet, and description in the placemark name. Perfect for planning your BTS pilgrimage! 🎤</div>
+      </div>
+
+      <div class="card">
+        <h2>🌟 Examples (BTS Style!)</h2>
+        <div class="row small">
+          <div class="line"><span class="kbd">Intersection</span> <span>Dynamite Rd <span class="axis">(NS)</span> &amp; Butter Ave <span class="axis">(EW)</span></span></div>
+          <div class="line"><span class="kbd">Road</span> <span>Permission to Dance Blvd <span class="axis">(NS)</span> South of Spring Day Lane <span class="axis">(EW)</span></span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>📝 Notes (ARMY Info)</h2>
+        <div class="notice">
+          Search powered by <b>OpenRouteService (Pelias)</b> + geometry from <b>OpenStreetMap (Overpass)</b>.  
+          Your API key only touches ORS geocoding; Overpass has no key or fees. Just like BTS music - accessible to all ARMY! 💜
+        </div>
+      </div>
+    </aside>
+
+    <main id="map"></main>
+  </div>
+
+  <div class="footer">
+    © CLNT-MNGT created by John | <span class="bts-gradient">Inspired by BTS 방탄소년단</span> 💜
+  </div>
+
+  <script>
+    // ====== CONFIG: your ORS key ======
+    const ORS_API_KEY = "5b3ce3597851110001cf6248cc03088f26cf40dd94fcdcd67fdd29b2";
+    // ==================================
+
+    // --- Map Init ---
+    const map = L.map('map', { zoomControl: true }).setView([40.758, -73.9855], 14);
+    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20, attribution: '&copy; OpenStreetMap contributors | 💜 BTS-themed by ARMY'
+    }).addTo(map);
+
+    // Layers
+    const geocodeMarkerLayer = L.layerGroup().addTo(map);
+    const waysLayer = L.layerGroup().addTo(map);
+    const clickHighlightLayer = L.layerGroup().addTo(map);
+    const intersectionsLayer = L.layerGroup().addTo(map);
+
+    // UI elements
+    const qInput = document.getElementById('query');
+    const dropdown = document.getElementById('suggestions');
+    const clearBtn = document.getElementById('clearBtn');
+    const goBtn = document.getElementById('goBtn');
+    const intersectionEl = document.getElementById('intersectionName');
+    const roadDescEl = document.getElementById('roadDescription');
+    const kmlBtn = document.getElementById('downloadKML');
+    const geocoderStatus = document.getElementById('geocoderStatus');
+
+    // ---- Autocomplete (ORS Pelias) ----
+    let debounceTimer = null;
+    qInput.addEventListener('input', () => {
+      const q = qInput.value.trim();
+      if (!q) { dropdown.style.display='none'; dropdown.innerHTML=''; return; }
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => fetchORSAutocomplete(q), 220);
+    });
+    qInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doTextSearch();
+    });
+    goBtn.addEventListener('click', doTextSearch);
+
+    async function fetchORSAutocomplete(text) {
+      try {
+        const url = new URL('https://api.openrouteservice.org/geocode/autocomplete');
+        url.search = new URLSearchParams({ text, size: '8' }).toString();
+        const res = await fetch(url, { headers: { 'Authorization': ORS_API_KEY } });
+        if (!res.ok) throw new Error('ORS geocoding failed');
+        const data = await res.json();
+        const feats = data.features || [];
+        if (!feats.length) { dropdown.style.display='none'; dropdown.innerHTML=''; return; }
+        dropdown.innerHTML = feats.map((f, i) => {
+          const label = f.properties?.label || f.properties?.name || 'Result';
+          return `<div data-idx="${i}">${escapeHtml(label)}</div>`;
+        }).join('');
+        dropdown.style.display='block';
+
+        [...dropdown.querySelectorAll('div')].forEach(div => {
+          div.addEventListener('click', () => {
+            const idx = Number(div.getAttribute('data-idx'));
+            const f = feats[idx];
+            dropdown.style.display='none';
+            dropdown.innerHTML='';
+            qInput.value = f.properties?.label || f.properties?.name || '';
+            const [lng, lat] = f.geometry.coordinates;
+            onGeocodeSelect([lat, lng], qInput.value, 'ORS');
+          });
+        });
+      } catch (e) {
+        dropdown.style.display='none';
+        dropdown.innerHTML='';
+      }
+    }
+    function escapeHtml(s){
+      return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // ---- Direct text search with fallback (ORS -> Nominatim) ----
+    async function geocodeTextORS(text) {
+      const url = new URL('https://api.openrouteservice.org/geocode/search');
+      url.search = new URLSearchParams({ text, size: '1' }).toString();
+      const res = await fetch(url, { headers: { 'Authorization': ORS_API_KEY } });
+      if (!res.ok) throw new Error('ORS search failed: ' + res.status);
+      const data = await res.json();
+      const feat = (data.features && data.features[0]) || null;
+      if (!feat) throw new Error('No ORS results');
+      const [lng, lat] = feat.geometry.coordinates;
+      const label = feat.properties?.label || feat.properties?.name || text;
+      return { lat, lng, label };
+    }
+    async function geocodeTextNominatim(text) {
+      const url = new URL('https://nominatim.openstreetmap.org/search');
+      url.search = new URLSearchParams({ q: text, format: 'json', addressdetails: '1', limit: '1' }).toString();
+      const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      if (!res.ok) throw new Error('Nominatim failed: ' + res.status);
+      const arr = await res.json();
+      if (!arr || !arr.length) throw new Error('No Nominatim results');
+      return { lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon), label: arr[0].display_name };
+    }
+    async function doTextSearch() {
+      const text = qInput.value.trim();
+      if (!text) return;
+      intersectionEl.innerHTML = '<span class="muted">🔍 Searching like ARMY looking for BTS…</span>';
+      roadDescEl.innerHTML = '<span class="muted">—</span>';
+      try {
+        let r, provider = 'ORS';
+        try {
+          r = await geocodeTextORS(text);
+        } catch (e) {
+          r = await geocodeTextNominatim(text);
+          provider = 'Nominatim';
+        }
+        onGeocodeSelect([r.lat, r.lng], r.label, provider);
+      } catch (err) {
+        intersectionEl.innerHTML = `<span class="muted">Search error: ${escapeHtml(err.message)} 😢</span>`;
+        geocoderStatus.textContent = '';
+      }
+    }
+
+    // Overpass helpers
+    const OVERPASS_ENDPOINTS = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.openstreetmap.ru/api/interpreter"
+    ];
+    async function overpassQuery(query) {
+      let lastErr;
+      for (const url of OVERPASS_ENDPOINTS) {
+        try {
+          const res = await fetch(url, {
+            method: 'POST',
+            body: query,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }
+          });
+          if (!res.ok) throw new Error(`Overpass error: ${res.status}`);
+          return await res.json();
+        } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error('All Overpass endpoints failed.');
+    }
+
+    // Geometry helpers
+    function averageBearing(latlngs) {
+      if (latlngs.length < 2) return 0;
+      let x=0,y=0,total=0;
+      for (let i=0;i<latlngs.length-1;i++){
+        const a=latlngs[i], b=latlngs[i+1];
+        const br=turf.bearing([a.lng,a.lat],[b.lng,b.lat]);
+        const segLen=turf.distance([a.lng,a.lat],[b.lng,b.lat]);
+        const rad=br*Math.PI/180;
+        x+=Math.cos(rad)*segLen; y+=Math.sin(rad)*segLen; total+=segLen;
+      }
+      if (total===0) return 0;
+      const avg=Math.atan2(y,x)*180/Math.PI;
+      return ((avg+540)%360)-180;
+    }
+    function axisFromBearingByLatLngs(latlngs) {
+      const b = averageBearing(latlngs);
+      const nb=Math.abs(((b%180)+180)%180);
+      const diffToNS=Math.min(nb,Math.abs(180-nb));
+      const diffToEW=Math.abs(90-nb);
+      return (diffToNS<=diffToEW)?'NS':'EW';
+    }
+    function relDirectionOnAxis(axis, fromPoint, toPoint) {
+      return axis==='NS' ? (toPoint.lat > fromPoint.lat ? 'North' : 'South')
+                         : (toPoint.lng > fromPoint.lng ? 'East'  : 'West');
+    }
+    const nice = s => (s||'').trim();
+
+    // State
+    let currentData = { ways: [], intersections: [] };
+
+    // KML export state
+    let lastIntersectionLabel = null;
+    let lastRoadDescription = null;
+    let lastClickedRoadSeg = null;
+    let lastCrossRoadSeg = null;
+    let lastIntersectionPoint = null;
+
+    function toLeafletLatLngs(coords){ return coords.map(c => L.latLng(c[0], c[1])); }
+
+    async function onGeocodeSelect([lat, lng], label, provider='ORS') {
+      geocoderStatus.textContent = `Geocoder: ${provider} 💜`;
+      setIntersectionPanel('<span class="muted">🗺️ Loading nearby roads like BTS loading their next hit…</span>');
+      setRoadPanel('<span class="muted">—</span>');
+      clearMapLayers();
+      geocodeMarkerLayer.clearLayers();
+
+      map.setView([lat, lng], 16);
+      L.circleMarker([lat, lng], { radius: 6, color: '#ff6b9d', weight: 2, fillColor: '#ffc1cc', fillOpacity: 0.9 })
+        .addTo(geocodeMarkerLayer)
+        .bindTooltip('ARMY location 💜', { sticky: true });
+
+      try {
+        currentData = await loadRoadsAround(lat, lng, 300);
+        drawWays(currentData.ways);
+
+        const ix = nearestIntersection(L.latLng(lat, lng), currentData.intersections);
+        if (!ix) {
+          setIntersectionPanel('<span class="muted">No intersection found nearby. Even BTS needs crossroads! 😅</span>');
+          lastIntersectionLabel = null; lastIntersectionPoint = null;
+          return;
+        }
+        const pair = bestTwoRoads(ix);
+        const text = pair ? formatIntersectionName(pair[0], pair[1]) : '—';
+        setIntersectionPanel(`<div class="line"><span class="kbd">Intersection name</span> <span>${text}</span></div>`);
+        drawIntersection(ix, pair);
+        lastIntersectionLabel = text;
+        lastIntersectionPoint = ix.point;
+      } catch (e) {
+        setIntersectionPanel(`<span class="muted">Error: ${escapeHtml(e.message)} 😢</span>`);
+      }
+    }
+
+    async function loadRoadsAround(lat, lng, radiusMeters = 250) {
+      const delta = radiusMeters / 111320;
+      const south = lat - delta, north = lat + delta, west = lng - delta, east = lng + delta;
+      const bbox = `${south},${west},${north},${east}`;
+      const q = `
+        [out:json][timeout:25];
+        (
+          way["highway"](${bbox});
+        );
+        (._;>;);
+        out body;
+      `;
+      const data = await overpassQuery(q);
+
+      const nodes = new Map();
+      for (const el of data.elements) if (el.type === 'node') nodes.set(el.id, [el.lat, el.lon]);
+
+      const ways = [];
+      for (const el of data.elements) {
+        if (el.type !== 'way') continue;
+        const name = el.tags?.name || el.tags?.ref || '';
+        if (!name) continue;
+        const coords = [];
+        for (const nid of el.nodes) {
+          const p = nodes.get(nid);
+          if (p) coords.push(p); // [lat, lon]
+        }
+        if (coords.length >= 2) {
+          const latlngs = toLeafletLatLngs(coords);
+          ways.push({
+            id: el.id,
+            name,
+            tags: el.tags || {},
+            latlngs,
+            axis: axisFromBearingByLatLngs(latlngs)
+          });
+        }
+      }
+
+      // intersections: shared nodes among named ways
+      const nodeToWays = new Map();
+      for (const el of data.elements) {
+        if (el.type !== 'way') continue;
+        const wname = el.tags?.name || el.tags?.ref || '';
+        if (!wname) continue;
+        for (const nid of el.nodes) {
+          if (!nodeToWays.has(nid)) nodeToWays.set(nid, new Set());
+          nodeToWays.get(nid).add(el.id);
+        }
+      }
+
+      const intersections = [];
+      for (const [nid, setWayIds] of nodeToWays.entries()) {
+        if (setWayIds.size < 2) continue;
+        const p = nodes.get(nid);
+        if (!p) continue;
+        const latlng = L.latLng(p[0], p[1]);
+        const participating = ways.filter(w => setWayIds.has(w.id));
+        const byName = new Map();
+        for (const w of participating) if (!byName.has(w.name)) byName.set(w.name, w);
+        const roads = [...byName.values()];
+        if (roads.length >= 2) intersections.push({ nodeId: nid, point: latlng, roads });
+      }
+      return { ways, intersections };
+    }
+
+    function drawWays(ways) {
+      ways.forEach(w => {
+        const color = w.axis === 'NS' ? '#9d8df1' : '#c89dff';
+        L.polyline(w.latlngs, { color, weight: 2, opacity: 0.7 }).addTo(waysLayer)
+          .bindTooltip(`${nice(w.name)} (${w.axis}) 💜`, { sticky: true });
+      });
+    }
+
+    function nearestIntersection(latlng, intersections) {
+      if (!intersections.length) return null;
+      let best = null, bestD = Infinity;
+      intersections.forEach(ix => {
+        const d = latlng.distanceTo(ix.point);
+        if (d < bestD) { bestD = d; best = ix; }
+      });
+      return best;
+    }
+
+    function bestTwoRoads(ix) {
+      if (!ix || ix.roads.length < 2) return null;
+      let bestPair = null, bestScore = -1;
+      for (let i=0;i<ix.roads.length;i++) {
+        for (let j=i+1;j<ix.roads.length;j++) {
+          const a = ix.roads[i], b = ix.roads[j];
+          const score = (a.name && b.name ? 2 : 0) + (a.axis !== b.axis ? 1 : 0);
+          if (score > bestScore) { bestScore = score; bestPair = [a,b]; }
+        }
+      }
+      return bestPair || ix.roads.slice(0,2);
+    }
+
+    // FIXED: was mistakenly printing axis twice for the second road
+    function formatIntersectionName(rA, rB) {
+      const [ns, ew] = rA.axis === 'NS' ? [rA, rB] : (rB.axis === 'NS' ? [rB, rA] : [rA, rB]);
+      if (ns && ew && ns.axis !== ew.axis) return `${nice(ns.name)} (NS) & ${nice(ew.name)} (EW)`;
+      return `${nice(rA.name)} (${rA.axis}) & ${nice(rB.name)} (${rB.axis})`;
+    }
+
+    function drawIntersection(ix, pair) {
+      L.circleMarker(ix.point, { radius: 6, color: '#ffc107', weight: 2, fillColor: '#fff3cd', fillOpacity: 0.95 })
+        .addTo(intersectionsLayer).bindTooltip('BTS Meeting Point 🎤', { sticky: true });
+
+      if (pair) {
+        pair.forEach(w => {
+          let nearestIdx = 0, bestD = Infinity;
+          w.latlngs.forEach((p,i) => {
+            const d = p.distanceTo(ix.point);
+            if (d < bestD) { bestD = d; nearestIdx = i; }
+          });
+          const s=Math.max(0,nearestIdx-4), t=Math.min(w.latlngs.length-1,nearestIdx+4);
+          const seg = w.latlngs.slice(s,t+1);
+          L.polyline(seg, { color:'#e91e63', weight:5, opacity:0.95 }).addTo(intersectionsLayer);
+        });
+      }
+    }
+
+    function setIntersectionPanel(html){ intersectionEl.innerHTML = html; }
+    function setRoadPanel(html){ roadDescEl.innerHTML = html; }
+
+    function clearMapLayers() {
+      waysLayer.clearLayers();
+      intersectionsLayer.clearLayers();
+      clickHighlightLayer.clearLayers();
+      kmlBtn.disabled = true;
+      lastIntersectionLabel = null;
+      lastRoadDescription = null;
+      lastClickedRoadSeg = null;
+      lastCrossRoadSeg = null;
+      lastIntersectionPoint = null;
+      geocoderStatus.textContent = '';
+    }
+
+    clearBtn.addEventListener('click', () => {
+      qInput.value = '';
+      dropdown.style.display='none'; dropdown.innerHTML='';
+      geocodeMarkerLayer.clearLayers();
+      clearMapLayers();
+      setIntersectionPanel('—');
+      setRoadPanel('Tip: Click a road segment on the map like choosing your favorite BTS song! 💜');
+    });
+
+    // Click handling
+    map.on('click', (e) => {
+      if (!currentData.ways.length) {
+        setRoadPanel('<span class="muted">Search a location first, then click a road. Just like ARMY needs to find BTS first! 💜</span>');
+        return;
+      }
+      clickHighlightLayer.clearLayers();
+      const click = e.latlng;
+
+      // Find nearest way to click (snap)
+      let bestWay=null, bestDist=Infinity, bestSnap=null, bestIndex=0;
+      currentData.ways.forEach(w => {
+        const snap = nearestPointOnPolyline(w.latlngs, click);
+        if (snap.distance < bestDist) {
+          bestDist = snap.distance;
+          bestWay = w;
+          bestSnap = snap.latlng;
+          bestIndex = snap.index;
+        }
+      });
+      if (!bestWay) {
+        setRoadPanel('<span class="muted">No nearby road. Even BTS needs roads to travel! 🛣️</span>');
+        return;
+      }
+
+      // Highlight clicked road
+      L.polyline(bestWay.latlngs, { color:'#6f42c1', weight:5, opacity:0.95 }).addTo(clickHighlightLayer)
+        .bindTooltip(`${nice(bestWay.name)} (${bestWay.axis}) - BTS approved! 💜`, { sticky:true });
+
+      // Find nearest intersection that includes this way
+      let nearestIx=null, nearestIxD=Infinity, nearestCrossRoad=null;
+      currentData.intersections.forEach(ix => {
+        const contains = ix.roads.some(r => r.id === bestWay.id);
+        if (!contains) return;
+        const d = ix.point.distanceTo(click);
+        if (d < nearestIxD) {
+          nearestIxD = d; nearestIx = ix;
+          nearestCrossRoad = ix.roads.find(r => r.id !== bestWay.id) || ix.roads[0];
+        }
+      });
+
+      if (!nearestIx || !nearestCrossRoad) {
+        setRoadPanel(`<div class="line"><span class="kbd">Road</span> <span>${nice(bestWay.name)} <span class="axis">(${bestWay.axis})</span></span></div>
+                      <div class="small muted">No cross street found nearby on this road. Like a BTS solo track! 🎵</div>`);
+        lastRoadDescription = `${nice(bestWay.name)} (${bestWay.axis})`;
+        lastClickedRoadSeg = null;
+        lastCrossRoadSeg = null;
+        kmlBtn.disabled = false;
+        return;
+      }
+
+      // Cross road short segment
+      let nearestIdx=0, bestD2=Infinity;
+      nearestCrossRoad.latlngs.forEach((p,i)=> {
+        const d = p.distanceTo(nearestIx.point);
+        if (d < bestD2) { bestD2=d; nearestIdx=i; }
+      });
+      const s=Math.max(0,nearestIdx-4), t=Math.min(nearestCrossRoad.latlngs.length-1,nearestIdx+4);
+      const crossSeg = nearestCrossRoad.latlngs.slice(s,t+1);
+
+      // Draw visuals
+      L.polyline(crossSeg, { color:'#e91e63', weight:5, opacity:0.95 }).addTo(clickHighlightLayer);
+      L.circleMarker(nearestIx.point, { radius:6, color:'#ffc107', weight:2, fillColor:'#fff3cd', fillOpacity:0.95 })
+        .addTo(clickHighlightLayer).bindTooltip('BTS crossroads 🎤', { sticky:true });
+      L.circleMarker(bestSnap, { radius:5, color:'#f8f6ff', weight:2, fillColor:'#f8f6ff', fillOpacity:1 })
+        .addTo(clickHighlightLayer).bindTooltip('Your chosen spot 💜', { sticky:true });
+
+      // Relative direction text
+      const rel = relDirectionOnAxis(bestWay.axis, nearestIx.point, bestSnap);
+      const out = `${nice(bestWay.name)} <span class="axis">(${bestWay.axis})</span> ${rel} of ${nice(nearestCrossRoad.name)} <span class="axis">(${nearestCrossRoad.axis})</span>`;
+
+      setRoadPanel(`<div class="line"><span class="kbd">Road name</span><span>${out}</span></div>
+                    <div class="small muted">Zoom in and click again to refine the segment. Perfect like BTS choreography! 💃</div>`);
+
+      // Save for KML
+      lastRoadDescription = `${nice(bestWay.name)} (${bestWay.axis}) ${rel} of ${nice(nearestCrossRoad.name)} (${nearestCrossRoad.axis})`;
+      lastIntersectionLabel = formatIntersectionName(bestWay, nearestCrossRoad);
+      lastIntersectionPoint = nearestIx.point;
+      lastClickedRoadSeg = extractShortSegmentAround(bestWay.latlngs, bestIndex, 6);
+      lastCrossRoadSeg = crossSeg;
+      kmlBtn.disabled = false;
+    });
+
+    // Nearest point on a Leaflet polyline
+    function nearestPointOnPolyline(path, targetLatLng) {
+      let best = { distance: Infinity, latlng: null, index: 0 };
+      for (let i=0;i<path.length-1;i++) {
+        const proj = projectPointOnSegment(path[i], path[i+1], targetLatLng);
+        const d = proj.distanceTo(targetLatLng);
+        if (d < best.distance) best = { distance: d, latlng: proj, index: i };
+      }
+      return best;
+    }
+    function projectPointOnSegment(a, b, p) {
+      const toXY = (ll) => {
+        const x = ll.lng * 111319.49079327357 * Math.cos(ll.lat*Math.PI/180);
+        const y = ll.lat * 111319.49079327357;
+        return {x,y};
+      };
+      const A = toXY(a), B = toXY(b), P = toXY(p);
+      const ABx=B.x-A.x, ABy=B.y-A.y;
+      const APx=P.x-A.x, APy=P.y-A.y;
+      const ab2=ABx*ABx+ABy*ABy || 1;
+      const t=Math.max(0,Math.min(1,(APx*ABx + APy*ABy)/ab2));
+      const x=A.x+ABx*t, y=A.y+ABy*t;
+      const lat=y/111319.49079327357;
+      const lng=x/(111319.49079327357*Math.cos(lat*Math.PI/180));
+      return L.latLng(lat, lng);
+    }
+    function extractShortSegmentAround(arr, idx, count=6) {
+      const s=Math.max(0, idx - Math.floor(count/2));
+      const t=Math.min(arr.length-1, idx + Math.floor(count/2));
+      return arr.slice(s,t+1);
+    }
+
+    // KML export
+    function coordsToKmlLine(coords) {
+      if (!coords || !coords.length) return '';
+      const lines = coords.map(ll => `${ll.lng},${ll.lat},0`).join(' ');
+      return `
+        <Placemark>
+          <Style><LineStyle><color>ff7f7f7f</color><width>4</width></LineStyle></Style>
+          <LineString><tessellate>1</tessellate><coordinates>${lines}</coordinates></LineString>
+        </Placemark>`;
+    }
+    function pointToKml(ll, name) {
+      if (!ll) return '';
+      return `
+        <Placemark>
+          <name>${escapeXml(name||'BTS Intersection 💜')}</name>
+          <Style><IconStyle><color>ff08b1e9</color><scale>1.2</scale></IconStyle></Style>
+          <Point><coordinates>${ll.lng},${ll.lat},0</coordinates></Point>
+        </Placemark>`;
+    }
+    function escapeXml(s){
+      return (s||'').replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
+    }
+
+    kmlBtn.addEventListener('click', () => {
+      const name = lastRoadDescription || lastIntersectionLabel || 'BTS Intersection 💜';
+      const header = `<?xml version="1.0" encoding="UTF-8"?>
+        <kml xmlns="http://www.opengis.net/kml/2.2">
+        <Document><name>${escapeXml(name)}</name>`;
+      const pieces = [];
+      if (lastIntersectionPoint && lastIntersectionLabel) {
+        pieces.push(pointToKml({lat:lastIntersectionPoint.lat, lng:lastIntersectionPoint.lng}, lastIntersectionLabel));
+      }
+      if (lastClickedRoadSeg && lastClickedRoadSeg.length>1) pieces.push(coordsToKmlLine(lastClickedRoadSeg));
+      if (lastCrossRoadSeg && lastCrossRoadSeg.length>1) pieces.push(coordsToKmlLine(lastCrossRoadSeg));
+      const footer = `</Document></kml>`;
+      const kml = header + pieces.join('\n') + footer;
+      const blob = new Blob([kml], {type: 'application/vnd.google-earth.kml+xml'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (name.replace(/[^\w\-]+/g,'_').slice(0,80) || 'bts_intersection') + '.kml';
+      document.body.appendChild(a);
+      a.click();
+      requestAnimationFrame(()=>{ URL.revokeObjectURL(url); a.remove(); });
+    });
+
+    // Initial helper text
+    setIntersectionPanel('<span class="muted">Search a place to compute the nearest intersection. Like finding where BTS members meet! 💜</span>');
+    setRoadPanel('<span class="muted">Then click a road to see "Road (axis) North/South/East/West of Cross (axis)" - BTS style directions! 🎵</span>');
+  </script>
+</body>
+</html>
